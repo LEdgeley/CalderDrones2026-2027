@@ -18,6 +18,7 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
  *
  * Left stick translates, right stick turns. Releasing the right stick brakes the rotation
  * and then holds the heading the robot settled at. Circle toggles robot/field-centric.
+ * Hold the left bumper for slow mode or the right bumper for sprint.
  * Gains are live-tunable from Panels.
  */
 @TeleOp(name = "Driving Test", group = "TeleOp")
@@ -35,6 +36,12 @@ public class DrivingTestTeleOp extends OpMode {
     // Driver input tuning
     public static double turnDeadband = 0.05;
     public static double turnScale = 1.0;
+
+    // Speed scales: hold left bumper for slow, right bumper for sprint, neither or both for normal
+    public static double slowSpeed = 0.25;
+    public static double normalSpeed = 0.66;
+    public static double sprintSpeed = 1.0;
+
     /** Angular velocity (rad/s) below which the robot is considered settled and the heading is locked. */
     public static double settleRate = 0.3;
 
@@ -84,12 +91,26 @@ public class DrivingTestTeleOp extends OpMode {
         double heading = follower.pose().heading();
         double angularVelocity = follower.twist().omega;
 
+        String speedMode;
+        double speed;
+        if (gamepad1.left_bumper && !gamepad1.right_bumper) {
+            speedMode = "Slow";
+            speed = slowSpeed;
+        } else if (gamepad1.right_bumper && !gamepad1.left_bumper) {
+            speedMode = "Sprint";
+            speed = sprintSpeed;
+        } else {
+            speedMode = "Normal";
+            speed = normalSpeed;
+        }
+
         // +forward is forward, +strafe is left and +turn is CCW, so the X axes are negated
         double forward = -gamepad1.left_stick_y;
         double strafe = -gamepad1.left_stick_x;
         double turnInput = -gamepad1.right_stick_x;
 
-        DrivePowers powers = new DrivePowers(forward, strafe, turnInput * turnScale);
+        // Speed scaling applies to driver input only, so the heading lock keeps full authority
+        DrivePowers powers = new DrivePowers(forward * speed, strafe * speed, turnInput * turnScale * speed);
 
         if (fieldCentric) {
             powers = ManualDrive.fieldCentric(powers, heading);
@@ -116,6 +137,7 @@ public class DrivingTestTeleOp extends OpMode {
         follower.manual(powers);
 
         telemetryM.addData("Drive Mode", fieldCentric ? "Field-centric" : "Robot-centric");
+        telemetryM.addData("Speed Mode", speedMode);
         telemetryM.addData("Heading State", headingState);
         telemetryM.addData("Target Heading", Math.toDegrees(targetHeading));
         telemetryM.addData("Actual Heading", Math.toDegrees(heading));

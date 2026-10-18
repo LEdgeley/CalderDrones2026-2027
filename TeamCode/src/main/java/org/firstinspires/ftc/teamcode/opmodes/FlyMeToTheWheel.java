@@ -32,7 +32,7 @@ package org.firstinspires.ftc.teamcode.opmodes;
 import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
-import com.qualcomm.robotcore.eventloop.opmode.Disabled;
+import com.pedropathing.controllers.Controller;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -42,16 +42,9 @@ import com.qualcomm.robotcore.util.Range;
 
 
 /*
- * This file contains an minimal example of a Linear "OpMode". An OpMode is a 'program' that runs in either
- * the autonomous or the teleop period of an FTC match. The names of OpModes appear on the menu
- * of the FTC Driver Station. When a selection is made from the menu, the corresponding OpMode
- * class is instantiated on the Robot Controller and executed.
- *
- * This particular OpMode just executes a basic Tank Drive Teleop for a two wheeled robot
- * It includes all the skeletal structure that all linear OpModes contain.
- *
- * Use Android Studio to Copy this Class, and Paste it into your team's code folder with a new name.
- * Remove or comment out the @Disabled line to add this OpMode to the Driver Station OpMode list
+ * Flywheel velocity test. Holds the "Launcher" motor at targetRPM using Pedro Pathing 3 controllers:
+ * PID feedback on the RPM error plus feedforward on the target RPM.
+ * All gains and the target can be changed live from Panels.
  */
 
 @TeleOp(name="Fly Me To The Wheel", group="Linear OpMode")
@@ -62,25 +55,39 @@ public class FlyMeToTheWheel extends LinearOpMode {
 
     // Declare OpMode members.
     private ElapsedTime runtime = new ElapsedTime();
-    private ElapsedTime timer = new ElapsedTime();
+    private ElapsedTime loopTimer = new ElapsedTime();
     private DcMotorEx flywheel = null;
 
-
+    // Feedback gains (power per RPM of error)
     public static double Kp = 0.005;
     public static double Kd = 0.000004;
     public static double Ki = 0.000002;
+
+    // Feedforward gains: kV is power per RPM of target, kS is the constant power to overcome friction
+    public static double kV = 0.0;
+    public static double kS = 0.0;
+
+    /** Largest change in motor power allowed per second (2.0 = zero to full power in 0.5 s). */
+    public static double maxPowerRate = 2.0;
+    /** Longest loop time used for the slew limit, so a stalled loop can't allow a large jump. */
+    private static final double MAX_LOOP_SECONDS = 0.05;
+    /** Low-pass filter time constant for the measured RPM in seconds (0 = no filtering). */
+    public static double rpmFilterTimeConstant = 0.03;
     public static double targetRPM = 5000;
+
     @Override
     public void runOpMode() {
 
-        // Setup a variable for each drive wheel to save power level for telemetry
-        double power;
-
-
-        double integralSum = 0;
-
-        double lastError = 0;
         double lastOut = 0;
+
+        // Suppliers let the gains be changed from Panels while running
+        Controller flywheelController = Controller.sum(
+                Controller.proportional(() -> Kp),
+                Controller.integral(() -> Ki),
+                Controller.derivative(() -> Kd),
+                Controller.proportionalFeedforward(() -> kV),
+                Controller.staticTargetFeedforward(() -> kS)
+        );
 
         telemetry.addData("Status", "Initialized");
         telemetry.update();
@@ -90,67 +97,66 @@ public class FlyMeToTheWheel extends LinearOpMode {
         // step (using the FTC Robot Controller app on the phone).
         flywheel  = hardwareMap.get(DcMotorEx.class, "Launcher");
 
-        // To drive forward, most robots need the motor on one side to be reversed, because the axles point in opposite directions.
-        // Pushing the left stick forward MUST make robot go forward. So adjust these two lines based on your first test drive.
-        // Note: The settings here assume direct drive on left and right wheels.  Gear Reduction or 90 Deg drives may require direction flips
         flywheel.setDirection(DcMotor.Direction.REVERSE);
         flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        power = 0.0;
 
         // Wait for the game to start (driver presses START)
         waitForStart();
         runtime.reset();
-        timer.reset();
+        loopTimer.reset();
+        flywheelController.reset();
+
+        double filteredRPM = getRPM();
+        double rpmRate = 0;
 
 
         // run until the end of the match (driver presses STOP)
         while (opModeIsActive()) {
 
-            double currentRPM = flywheel.getVelocity() / 28.0 * 60.0;
-            // calculate the error
-            double error = targetRPM - currentRPM;
+            double dt = loopTimer.seconds();
+            loopTimer.reset();
 
-            // rate of change of the error
-            double derivative = (error - lastError) / timer.seconds();
-
-            // sum of all error over time
-            integralSum = integralSum + (error * timer.seconds());
-
-            double out = Range.clip((Kp * error) + (Ki * integralSum) + (Kd * derivative), 0.0, 1.0);
-            if ((out - lastOut)< -0.01)
-            {
-                out = lastOut - 0.01;
+            // Low-pass filter the measured RPM, scaled by this loop's duration
+            double rawRPM = getRPM();
+            double alpha = rpmFilterTimeConstant > 0 ? dt / (rpmFilterTimeConstant + dt) : 1.0;
+            double lastFilteredRPM = filteredRPM;
+            filteredRPM += alpha * (rawRPM - filteredRPM);
+            if (dt > 1e-3) {
+                rpmRate = (filteredRPM - lastFilteredRPM) / dt;
             }
 
-            else if ((out - lastOut) > 0.01) {
-                {
-                    out = lastOut + 0.01;
-                }
-            }
+            double error = targetRPM - filteredRPM;
 
-            // Send calculated power to wheels
+            // Passing the filtered RPM's rate of change makes the D term act on the measurement
+            double out = Range.clip(flywheelController.calculate(targetRPM, error, rpmRate), 0.0, 1.0);
+
+            // Limit how quickly the power can change, scaled by this loop's duration
+            double maxStep = maxPowerRate * Math.min(dt, MAX_LOOP_SECONDS);
+            out = Range.clip(out, lastOut - maxStep, lastOut + maxStep);
+
+            // Send calculated power to the flywheel
             flywheel.setPower(out);
             lastOut = out;
-            lastError = error;
-
-            // reset the timer for next time
-            timer.reset();
-
 
 
             // Show the elapsed game time and wheel power.
             panelsTelemetry.addData("targetRPM", targetRPM);
-            panelsTelemetry.addData("currentRPM", currentRPM);
+            panelsTelemetry.addData("rawRPM", rawRPM);
+            panelsTelemetry.addData("filteredRPM", filteredRPM);
             panelsTelemetry.addData("out", out);
 
 
             telemetry.addData("Status", "Run Time: " + runtime.toString());
             telemetry.addData("targetRPM", "targetRPM (%.2f)", targetRPM);
-            telemetry.addData("currentRPM", "currentRPM (%.2f)", currentRPM);
+            telemetry.addData("filteredRPM", "filteredRPM (%.2f)", filteredRPM);
             telemetry.addData("error", "error (%.2f)", error);
-            telemetry.addData("Motors", "left (%.2f), right (%.2f)", out, out);
-            telemetry.addData("Motors", "left (%.2f), right (%.2f)", out, out);
+            telemetry.addData("Power", "%.2f", out);
             panelsTelemetry.update(telemetry);
         }
+    }
+
+    /** Motor RPM from the 28 counts-per-revolution motor encoder. */
+    private double getRPM() {
+        return flywheel.getVelocity() / 28.0 * 60.0;
     }
 }
