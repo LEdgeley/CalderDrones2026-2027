@@ -1,260 +1,199 @@
 package org.firstinspires.ftc.teamcode.kiwi;
 
-import com.pedropathing.drivetrain.CustomDrivetrain;
+import com.pedropathing.drivetrain.DrivePowers;
+import com.pedropathing.drivetrain.Drivetrain;
+import com.pedropathing.revhub.drivetrains.CachedMotor;
+import com.pedropathing.utils.Utils;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.hardware.configuration.typecontainers.MotorConfigurationType;
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
-
-import java.util.Arrays;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * Kiwi Drivetrain implementation.
- * Angles are in radians and positive rotation is to the left (CCW, top-down).
- *
- * @author Kabir Goyal
- * @author Baron Henderson
+ * 3-wheel Kiwi drivetrain for Pedro Pathing 3, structured after the revhub Mecanum drivetrain.
+ * +forward is +X, +strafe is left (+Y) and +turn is CCW (top-down), matching Pedro's convention.
+ * Wheels are spaced 120 degrees apart: Motor A drives along the Y axis (left/right),
+ * Motor B is front-left and Motor C is front-right.
  */
-public class Kiwi extends CustomDrivetrain {
-    private final KiwiConstants constants;
-
-    private final DcMotorEx motorA;
-    private final DcMotorEx motorB;
-    private final DcMotorEx motorC;
-    private final List<DcMotorEx> motors;
-    private final double[] lastMotorPowers;
+public class Kiwi implements Drivetrain {
+    public final KiwiConfig config;
+    private final CachedMotor[] motors;
     private final VoltageSensor voltageSensor;
-    private double motorCachingThreshold;
+    public final double[] wheelPowers = new double[3];
 
-    protected double lastHeading = 0;
+    private static final int A = 0;
+    private static final int B = 1;
+    private static final int C = 2;
 
-    private boolean useBrakeModeInTeleOp;
-    private double staticFrictionCoefficient;
-    private double lastForward = 0;
-    private double lastStrafe = 0;
-    private double lastRotation = 0;
-    private double lastAvgScaling = 0;
+    private static final double SIN_60 = Math.sqrt(3) / 2.0;
 
-    public Kiwi(HardwareMap hardwareMap, KiwiConstants constants) {
-        this.constants = constants;
+    private double powerScale = 1.0;
+    private DrivePowers drivePowers = DrivePowers.zero();
 
-        this.maxPowerScaling = constants.maxPower;
-        this.motorCachingThreshold = constants.motorCachingThreshold;
-        this.useBrakeModeInTeleOp = constants.useBrakeModeInTeleOp;
+    public Kiwi(HardwareMap map, KiwiConfig config) {
+        this.config = config;
+        double powerDeadband = config.powerThreshold.get();
 
-        this.voltageSensor = hardwareMap.voltageSensor.iterator().next();
+        motors = new CachedMotor[]{
+                new CachedMotor(map.get(DcMotorEx.class, config.motorAName.get()), powerDeadband),
+                new CachedMotor(map.get(DcMotorEx.class, config.motorBName.get()), powerDeadband),
+                new CachedMotor(map.get(DcMotorEx.class, config.motorCName.get()), powerDeadband)
+        };
 
-        motorA = hardwareMap.get(DcMotorEx.class, constants.motorAName);
-        motorB = hardwareMap.get(DcMotorEx.class, constants.motorBName);
-        motorC = hardwareMap.get(DcMotorEx.class, constants.motorCName);
-
-        motors = Arrays.asList(motorA, motorB, motorC);
-        lastMotorPowers = new double[] {0,0,0};
-
-        for (DcMotorEx motor : motors) {
-            MotorConfigurationType motorConfigurationType = motor.getMotorType().clone();
+        for (CachedMotor motor : motors) {
+            MotorConfigurationType motorConfigurationType = motor.raw().getMotorType().clone();
             motorConfigurationType.setAchieveableMaxRPMFraction(1.0);
-            motor.setMotorType(motorConfigurationType);
+            motor.raw().setMotorType(motorConfigurationType);
         }
 
-        setMotorsToFloat();
-        breakFollowing();
+        motors[A].setDirection(config.motorADirection.get());
+        motors[B].setDirection(config.motorBDirection.get());
+        motors[C].setDirection(config.motorCDirection.get());
 
-        updateConstants();
+        voltageSensor = map.voltageSensor.iterator().next();
+
+        setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
     }
 
-    /**
-     * This method takes in forward, strafe, and rotation values and applies them to
-     * the 3-wheel Kiwi drivetrain.
-     *
-     * @param forward  the forward power value (+X is forward)
-     * @param strafe   the strafe power value (+Y is left, matching Pedro's convention)
-     * @param rotation the rotation power value (Positive is CCW)
-     */
-    @Override
-    public void arcadeDrive(double forward, double strafe, double rotation) {
-        lastForward = forward;
-        lastStrafe = strafe;
-        lastRotation = rotation;
+    public void applyDrive(DrivePowers powers) {
+        drivePowers = powers;
 
-        // 3-Wheel Kiwi Kinematics (Spaced 120 degrees apart)
-        // Assumes Motor A's driving force is parallel to the Y-axis (Left/Right)
-        // Motor B is at 120 degrees (front-left), Motor C is at 240 degrees (front-right)
-        double powerA = -strafe + rotation;
-        double powerB = (-Math.sqrt(3) / 2.0 * forward) + (0.5 * strafe) + rotation;
-        double powerC = (Math.sqrt(3) / 2.0 * forward) + (0.5 * strafe) + rotation;
+        double[] wheelPowers = computeWheelPowersUnnormalized(powers);
 
-        // Apply voltage compensation if enabled
-        if (voltageCompensation) {
+        if (config.voltageCompensation.get()) {
             double voltageNormalized = getVoltageNormalized();
-            powerA *= voltageNormalized;
-            powerB *= voltageNormalized;
-            powerC *= voltageNormalized;
+            for (int i = 0; i < wheelPowers.length; i++) {
+                wheelPowers[i] *= voltageNormalized;
+            }
         }
 
-        // Normalize motor powers if any magnitude exceeds maxPowerScaling
-        // This preserves the structural integrity of your translation/rotation vector
-        double max = Math.max(Math.abs(powerA), Math.max(Math.abs(powerB), Math.abs(powerC)));
-        if (max > maxPowerScaling) {
-            powerA = (powerA / max) * maxPowerScaling;
-            powerB = (powerB / max) * maxPowerScaling;
-            powerC = (powerC / max) * maxPowerScaling;
+        double maxPower = 1.0;
+        for (double power : wheelPowers) {
+            maxPower = Math.max(maxPower, Math.abs(power));
         }
 
-        // Output to the hardware
-        motorA.setPower(powerA);
-        motorB.setPower(powerB);
-        motorC.setPower(powerC);
+        powerScale = 1.0 / maxPower;
 
-        // Cache the powers for tracking/debugging
-        lastMotorPowers[0] = powerA;
-        lastMotorPowers[1] = powerB;
-        lastMotorPowers[2] = powerC;
-    }
-
-    /**
-     * Updates cached values from the constants object.
-     */
-    @Override
-    public void updateConstants() {
-        motorA.setDirection(constants.motorADirection);
-        motorB.setDirection(constants.motorBDirection);
-        motorC.setDirection(constants.motorCDirection);
-        this.useBrakeModeInTeleOp = constants.useBrakeModeInTeleOp;
-        this.voltageCompensation = constants.useVoltageCompensation;
-        this.nominalVoltage = constants.nominalVoltage;
-        this.staticFrictionCoefficient = constants.staticFrictionCoefficient;
-        this.useBrakeModeInTeleOp = constants.getUseBrakeModeInTeleOp();
-        this.maxPowerScaling = constants.getMaxPower(); // inherited from Drivetrain, used by CustomDrivetrain
-        this.voltageCompensation = constants.getUseVoltageCompensation(); // inherited from Drivetrain
-        this.nominalVoltage = constants.getNominalVoltage(); // inherited from Drivetrain
-        this.staticFrictionCoefficient = constants.getStaticFrictionCoefficient();
-
-    }
-
-    /**
-     * Stops following and holds pod angles while floating drive motors.
-     */
-    @Override
-    public void breakFollowing() {
-        for (int i = 0; i < motors.size(); i++) {
-            lastMotorPowers[i] = 0;
-            motors.get(i).setPower(0);
-        }
-        setMotorsToFloat();
-    }
-
-    /**
-     * Starts teleop drive with the configured brake mode.
-     */
-    @Override
-    public void startTeleopDrive() {
-        if (useBrakeModeInTeleOp) {
-            setMotorsToBrake();
+        for (int i = 0; i < wheelPowers.length; i++) {
+            this.wheelPowers[i] = wheelPowers[i] / maxPower;
+            motors[i].setPower(this.wheelPowers[i]);
         }
     }
 
-    /**
-     * @param brakeMode set to true to enable brake mode in teleop
-     */
+    public double[] computeWheelPowersUnnormalized(DrivePowers powers) {
+        double[] wheelPowers = new double[3];
+        double forward = powers.forward();
+        double strafe = powers.strafe();
+        double turn = powers.turn();
+
+        wheelPowers[A] = -strafe + turn;
+        wheelPowers[B] = -SIN_60 * forward + 0.5 * strafe + turn;
+        wheelPowers[C] = SIN_60 * forward + 0.5 * strafe + turn;
+
+        return wheelPowers;
+    }
+
     @Override
-    public void startTeleopDrive(boolean brakeMode) {
-        if (brakeMode) {
-            setMotorsToBrake();
+    public double maxScaling(DrivePowers current, DrivePowers delta) {
+        double lambda = 1.0;
+
+        double[] currentPowers = computeWheelPowersUnnormalized(current);
+        double[] deltaPowers = computeWheelPowersUnnormalized(delta);
+
+        for (int i = 0; i < 3; i++) {
+            double a = currentPowers[i];
+            double b = deltaPowers[i];
+
+            if (Math.abs(b) < 1e-9) continue;
+
+            double t1 = (1.0 - a) / b;
+            double t2 = (-1.0 - a) / b;
+
+            if (t1 >= 0.0 && t1 < lambda) lambda = t1;
+            if (t2 >= 0.0 && t2 < lambda) lambda = t2;
+        }
+
+        return Utils.clamp(lambda, 0.0, 1.0);
+    }
+
+    @Override
+    public void drive(DrivePowers powers, boolean manual) {
+        if (manual && config.manualBrakeMode.get())
+            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        else
+            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        applyDrive(powers);
+    }
+
+    @Override
+    public void stop() {
+        stop(config.manualBrakeMode.get());
+    }
+
+    @Override
+    public void stop(boolean brake) {
+        if (brake) {
+            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         } else {
-            setMotorsToFloat();
+            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        }
+
+        for (int i = 0; i < motors.length; i++) {
+            wheelPowers[i] = 0;
+            motors[i].setPower(0);
         }
     }
 
-    /**
-     * @return maximum x velocity
-     */
     @Override
-    public double xVelocity() {
-        return constants.getXVelocity();
+    public Map<String, Object> debug() {
+        Map<String, Object> map = new HashMap<>();
+
+        map.put("forward", drivePowers.forward());
+        map.put("strafe", drivePowers.strafe());
+        map.put("turn", drivePowers.turn());
+        map.put("powerScale", powerScale);
+        map.put("motorAPower", wheelPowers[A]);
+        map.put("motorBPower", wheelPowers[B]);
+        map.put("motorCPower", wheelPowers[C]);
+
+        return map;
     }
 
-    /**
-     * @return maximum y velocity
-     */
-    @Override
-    public double yVelocity() {
-        return constants.getYVelocity();
+    public void setZeroPowerBehavior(DcMotor.ZeroPowerBehavior behavior) {
+        for (CachedMotor motor : motors) {
+            motor.setZeroPowerBehavior(behavior);
+        }
     }
 
-    /**
-     * @param xMovement maximum x velocity
+    /** Returns the sum of the three motors current in Amps
+     * This is not bulk cached by the motors so each motor request is a hardware read
      */
-    @Override
-    public void setXVelocity(double xMovement) {
-        constants.setXVelocity(xMovement);
-    }
-
-    /**
-     * @param yMovement maximum y velocity
-     */
-    @Override
-    public void setYVelocity(double yMovement) {
-        constants.setYVelocity(yMovement);
-    }
-
-    /**
-     * @return static friction coefficient used for voltage compensation
-     */
-    public double getStaticFrictionCoefficient() {
-        return staticFrictionCoefficient;
-    }
-
-    /**
-     * @return current battery voltage
-     */
-    @Override
-    public double getVoltage() {
-        return voltageSensor.getVoltage();
+    public double currentAmps() {
+        double total = 0;
+        for (CachedMotor motor : motors) {
+            total += motor.raw().getCurrent(CurrentUnit.AMPS);
+        }
+        return total;
     }
 
     /**
      * @return normalized voltage for voltage compensation
      */
     private double getVoltageNormalized() {
-        double voltage = getVoltage();
+        double voltage = voltageSensor.getVoltage();
+        double nominalVoltage = config.nominalVoltage.get();
+        double staticFrictionCoefficient = config.staticFrictionCoefficient.get();
         return (nominalVoltage - (nominalVoltage * staticFrictionCoefficient)) / (voltage
                 - ((nominalVoltage * nominalVoltage / voltage) * staticFrictionCoefficient));
     }
 
-    /**
-     * @return debug string for drivetrain state
-     */
     @Override
-    public String debugString() {
-        return "Kiwi{" +
-                " motorA=" + motorA +
-                ", motorB=" + motorB +
-                ", motorC=" + motorC +
-                ", motors=" + motors +
-                ", motorCachingThreshold=" + motorCachingThreshold +
-                ", useBrakeModeInTeleOp=" + useBrakeModeInTeleOp +
-                '}';
-    }
-
-    /**
-     * This sets the motors to the zero power behavior of brake.
-     */
-    private void setMotorsToBrake() {
-        for (DcMotorEx motor : motors) {
-            motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        }
-    }
-
-    /**
-     * This sets the motors to the zero power behavior of float.
-     */
-    private void setMotorsToFloat() {
-        for (DcMotorEx motor : motors) {
-            motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        }
+    public double interpolateVelocity(double xRadius, double yRadius, double theta) {
+        return 1.0 / (Math.abs(Math.cos(theta)) / xRadius + Math.abs(Math.sin(theta)) / yRadius);
     }
 }
