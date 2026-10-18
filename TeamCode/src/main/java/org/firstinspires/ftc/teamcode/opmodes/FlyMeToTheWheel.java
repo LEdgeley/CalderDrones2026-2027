@@ -32,19 +32,17 @@ package org.firstinspires.ftc.teamcode.opmodes;
 import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
-import com.pedropathing.controllers.Controller;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
-import com.qualcomm.robotcore.hardware.DcMotor;
-import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
-import com.qualcomm.robotcore.util.Range;
+
+import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
 
 
 /*
- * Flywheel velocity test. Holds the "Launcher" motor at targetRPM using Pedro Pathing 3 controllers:
- * PID feedback on the RPM error plus feedforward on the target RPM.
- * All gains and the target can be changed live from Panels.
+ * Flywheel velocity test. Holds the "Launcher" motor at targetRPM using the shared Flywheel controller
+ * (PID feedback plus feedforward, rate-limited power and a filtered RPM reading).
+ * The gains live in FlywheelConstants and can be changed live from Panels; use FlywheelTuner to tune them.
  */
 
 @TeleOp(name="Fly Me To The Wheel", group="Linear OpMode")
@@ -55,108 +53,43 @@ public class FlyMeToTheWheel extends LinearOpMode {
 
     // Declare OpMode members.
     private ElapsedTime runtime = new ElapsedTime();
-    private ElapsedTime loopTimer = new ElapsedTime();
-    private DcMotorEx flywheel = null;
 
-    // Feedback gains (power per RPM of error)
-    public static double Kp = 0.005;
-    public static double Kd = 0.000004;
-    public static double Ki = 0.000002;
-
-    // Feedforward gains: kV is power per RPM of target, kS is the constant power to overcome friction
-    public static double kV = 0.0;
-    public static double kS = 0.0;
-
-    /** Largest change in motor power allowed per second (2.0 = zero to full power in 0.5 s). */
-    public static double maxPowerRate = 2.0;
-    /** Longest loop time used for the slew limit, so a stalled loop can't allow a large jump. */
-    private static final double MAX_LOOP_SECONDS = 0.05;
-    /** Low-pass filter time constant for the measured RPM in seconds (0 = no filtering). */
-    public static double rpmFilterTimeConstant = 0.03;
     public static double targetRPM = 5000;
 
     @Override
     public void runOpMode() {
 
-        double lastOut = 0;
-
-        // Suppliers let the gains be changed from Panels while running
-        Controller flywheelController = Controller.sum(
-                Controller.proportional(() -> Kp),
-                Controller.integral(() -> Ki),
-                Controller.derivative(() -> Kd),
-                Controller.proportionalFeedforward(() -> kV),
-                Controller.staticTargetFeedforward(() -> kS)
-        );
-
         telemetry.addData("Status", "Initialized");
         telemetry.update();
 
-        // Initialize the hardware variables. Note that the strings used here as parameters
-        // to 'get' must correspond to the names assigned during the robot configuration
-        // step (using the FTC Robot Controller app on the phone).
-        flywheel  = hardwareMap.get(DcMotorEx.class, "Launcher");
-
-        flywheel.setDirection(DcMotor.Direction.REVERSE);
-        flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        Flywheel flywheel = new Flywheel(hardwareMap);
 
         // Wait for the game to start (driver presses START)
         waitForStart();
         runtime.reset();
-        loopTimer.reset();
-        flywheelController.reset();
-
-        double filteredRPM = getRPM();
-        double rpmRate = 0;
+        flywheel.reset();
 
 
         // run until the end of the match (driver presses STOP)
         while (opModeIsActive()) {
 
-            double dt = loopTimer.seconds();
-            loopTimer.reset();
-
-            // Low-pass filter the measured RPM, scaled by this loop's duration
-            double rawRPM = getRPM();
-            double alpha = rpmFilterTimeConstant > 0 ? dt / (rpmFilterTimeConstant + dt) : 1.0;
-            double lastFilteredRPM = filteredRPM;
-            filteredRPM += alpha * (rawRPM - filteredRPM);
-            if (dt > 1e-3) {
-                rpmRate = (filteredRPM - lastFilteredRPM) / dt;
-            }
-
-            double error = targetRPM - filteredRPM;
-
-            // Passing the filtered RPM's rate of change makes the D term act on the measurement
-            double out = Range.clip(flywheelController.calculate(targetRPM, error, rpmRate), 0.0, 1.0);
-
-            // Limit how quickly the power can change, scaled by this loop's duration
-            double maxStep = maxPowerRate * Math.min(dt, MAX_LOOP_SECONDS);
-            out = Range.clip(out, lastOut - maxStep, lastOut + maxStep);
-
-            // Send calculated power to the flywheel
-            flywheel.setPower(out);
-            lastOut = out;
+            flywheel.runToRPM(targetRPM);
+            double error = targetRPM - flywheel.filteredRPM();
 
 
             // Show the elapsed game time and wheel power.
             panelsTelemetry.addData("targetRPM", targetRPM);
-            panelsTelemetry.addData("rawRPM", rawRPM);
-            panelsTelemetry.addData("filteredRPM", filteredRPM);
-            panelsTelemetry.addData("out", out);
+            panelsTelemetry.addData("rawRPM", flywheel.rawRPM());
+            panelsTelemetry.addData("filteredRPM", flywheel.filteredRPM());
+            panelsTelemetry.addData("out", flywheel.power());
 
 
             telemetry.addData("Status", "Run Time: " + runtime.toString());
             telemetry.addData("targetRPM", "targetRPM (%.2f)", targetRPM);
-            telemetry.addData("filteredRPM", "filteredRPM (%.2f)", filteredRPM);
+            telemetry.addData("filteredRPM", "filteredRPM (%.2f)", flywheel.filteredRPM());
             telemetry.addData("error", "error (%.2f)", error);
-            telemetry.addData("Power", "%.2f", out);
+            telemetry.addData("Power", "%.2f", flywheel.power());
             panelsTelemetry.update(telemetry);
         }
-    }
-
-    /** Motor RPM from the 28 counts-per-revolution motor encoder. */
-    private double getRPM() {
-        return flywheel.getVelocity() / 28.0 * 60.0;
     }
 }
