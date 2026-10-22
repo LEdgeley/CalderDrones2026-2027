@@ -10,7 +10,7 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 @Configurable
 public class FlywheelConstants {
     public static String motorName = "Launcher";
-    public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.REVERSE;
+    public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.FORWARD;
     /** Encoder counts per motor revolution (the HD Hex motor's built-in encoder). */
     public static double countsPerRev = 28.0;
 

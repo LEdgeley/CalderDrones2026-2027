@@ -13,6 +13,12 @@ import org.firstinspires.ftc.teamcode.kiwi.KiwiConfig;
 
 public class Constants {
     public static KiwiConfig drivetrainConfig = new KiwiConfig(c -> {
+        c.motorAName.set("MotorA");
+        c.motorBName.set("MotorB");
+        c.motorCName.set("MotorC");
+        c.motorADirection.set(DcMotorSimple.Direction.REVERSE);
+        c.motorBDirection.set(DcMotorSimple.Direction.REVERSE);
+        c.motorCDirection.set(DcMotorSimple.Direction.REVERSE);
     });
 
     public static PinpointConfig localizerConfig = new PinpointConfig(c -> {
