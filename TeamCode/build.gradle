@@ -1,17 +1,4 @@
-buildscript {
-    repositories {
-        mavenCentral()
-        google()
-        maven { url = 'https://repo.dairy.foundation/releases' }
-    }
-    dependencies {
-        // Sloth Load: deploySloth hot-reloads TeamCode without a full install
-        classpath 'dev.frozenmilk:Load:0.3.2'
-    }
-}
-
 apply plugin: 'com.android.application'
-apply plugin: 'dev.frozenmilk.sinister.sloth.load'
 
 //
 // build.gradle in TeamCode
@@ -44,9 +31,6 @@ android {
     namespace = 'org.firstinspires.ftc.teamcode'
 
     packagingOptions {
-        jniLibs {
-            pickFirsts += ['**/*.so']
-        }
         jniLibs.useLegacyPackaging true
     }
 }
