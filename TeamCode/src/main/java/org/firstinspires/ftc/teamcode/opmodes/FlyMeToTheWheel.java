@@ -34,6 +34,7 @@ import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
@@ -42,7 +43,7 @@ import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
 /*
  * Flywheel velocity test. Holds the "Launcher" motor at targetRPM using the shared Flywheel controller
  * (PID feedback plus feedforward, rate-limited power and a filtered RPM reading).
- * The gains live in FlywheelConstants and can be changed live from Panels; use FlywheelTuner to tune them.
+ * It uses the Flywheel default gains; use FlywheelTuner to tune them.
  */
 
 @TeleOp(name="Fly Me To The Wheel", group="Linear OpMode")
@@ -54,6 +55,8 @@ public class FlyMeToTheWheel extends LinearOpMode {
     // Declare OpMode members.
     private ElapsedTime runtime = new ElapsedTime();
 
+    public static String motorName = "Launcher";
+    public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.FORWARD;
     public static double targetRPM = 5000;
 
     @Override
@@ -62,7 +65,7 @@ public class FlyMeToTheWheel extends LinearOpMode {
         telemetry.addData("Status", "Initialized");
         telemetry.update();
 
-        Flywheel flywheel = new Flywheel(hardwareMap);
+        Flywheel flywheel = new Flywheel(hardwareMap, motorName, direction);
 
         // Wait for the game to start (driver presses START)
         waitForStart();

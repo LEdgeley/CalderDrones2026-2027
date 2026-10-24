@@ -5,18 +5,19 @@ import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
-import org.firstinspires.ftc.teamcode.flywheel.FlywheelConstants;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Tuning OpMode for the flywheel gains in FlywheelConstants.
+ * Tuning OpMode for a flywheel's gains. Set motorName (and direction) in Panels before INIT to
+ * choose which flywheel to tune, e.g. the nectar or pollen launcher.
  *
  * A / Cross     Feedforward test: steps through fixed powers and fits kV and kS
  * D-pad up      Apply the fitted kV and kS (after the feedforward test)
@@ -24,11 +25,25 @@ import java.util.Locale;
  * Y / Triangle  Shot test: holds shotRPM and measures the speed drop and recovery after each shot
  * X / Square    Stop the flywheel
  *
- * Watch targetRPM, filteredRPM and power on the Panels graph; tune the gains in FlywheelConstants.
+ * Watch targetRPM, filteredRPM and power on the Panels graph and tune the gains below in Panels.
+ * They are copied into the flywheel every loop. Copy the final values into that flywheel's setup code.
  */
 @TeleOp(name = "Flywheel Tuner", group = "Tuning")
 @Configurable
 public class FlywheelTuner extends OpMode {
+
+    // Which flywheel to tune (read at INIT)
+    public static String motorName = "Launcher";
+    public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.FORWARD;
+
+    // Gains being tuned, starting from the Flywheel defaults
+    public static double kP = Flywheel.DEFAULT_KP;
+    public static double kI = Flywheel.DEFAULT_KI;
+    public static double kD = Flywheel.DEFAULT_KD;
+    public static double kV = Flywheel.DEFAULT_KV;
+    public static double kS = Flywheel.DEFAULT_KS;
+    public static double maxPowerRate = Flywheel.DEFAULT_MAX_POWER_RATE;
+    public static double rpmFilterTimeConstant = Flywheel.DEFAULT_RPM_FILTER_TIME_CONSTANT;
 
     // Feedforward test settings
     public static double ffStartPower = 0.2;
@@ -102,11 +117,12 @@ public class FlywheelTuner extends OpMode {
 
     @Override
     public void init() {
-        flywheel = new Flywheel(hardwareMap);
+        flywheel = new Flywheel(hardwareMap, motorName, direction);
+        applySettings();
         voltageSensor = hardwareMap.voltageSensor.iterator().next();
         telemetryM = PanelsTelemetry.INSTANCE.getTelemetry();
 
-        telemetry.addLine("Flywheel Tuner ready. Press START, then:");
+        telemetry.addLine("Flywheel Tuner ready for " + motorName + ". Press START, then:");
         telemetry.addLine("A/Cross: feedforward test   B/Circle: step test");
         telemetry.addLine("Y/Triangle: shot test   X/Square: stop");
         telemetry.update();
@@ -137,10 +153,12 @@ public class FlywheelTuner extends OpMode {
         }
 
         if (gamepad1.dpadUpWasPressed() && ffHasResult) {
-            FlywheelConstants.kV = fitKV;
-            FlywheelConstants.kS = fitKS;
-            ffMessage = "Applied kV and kS. Copy them into FlywheelConstants.java to keep them.";
+            kV = fitKV;
+            kS = fitKS;
+            ffMessage = "Applied kV and kS. Copy them into the flywheel's setup code to keep them.";
         }
+
+        applySettings();
 
         switch (mode) {
             case FEEDFORWARD:
@@ -163,11 +181,12 @@ public class FlywheelTuner extends OpMode {
         telemetryM.addData("rawRPM", flywheel.rawRPM());
         telemetryM.addData("power", flywheel.power());
 
+        telemetry.addData("Flywheel", motorName);
         telemetry.addData("Mode", mode);
         telemetry.addData("Battery", "%.2f V", voltageSensor.getVoltage());
         telemetry.addData("Loop time", "%.0f ms", loopMs);
-        telemetry.addData("Gains", "kP %.6f  kI %.7f  kD %.7f", FlywheelConstants.Kp, FlywheelConstants.Ki, FlywheelConstants.Kd);
-        telemetry.addData("Feedforward", "kV %.7f  kS %.3f", FlywheelConstants.kV, FlywheelConstants.kS);
+        telemetry.addData("Gains", "kP %.6f  kI %.7f  kD %.7f", flywheel.getKP(), flywheel.getKI(), flywheel.getKD());
+        telemetry.addData("Feedforward", "kV %.7f  kS %.3f", flywheel.getKV(), flywheel.getKS());
 
         switch (mode) {
             case FEEDFORWARD:
@@ -195,6 +214,14 @@ public class FlywheelTuner extends OpMode {
     @Override
     public void stop() {
         flywheel.stop();
+    }
+
+    /** Copies the Panels values into the flywheel, so changes take effect straight away. */
+    private void applySettings() {
+        flywheel.setPID(kP, kI, kD);
+        flywheel.setFeedforward(kV, kS);
+        flywheel.setMaxPowerRate(maxPowerRate);
+        flywheel.setRpmFilterTimeConstant(rpmFilterTimeConstant);
     }
 
     // ---------------- Feedforward test ----------------
