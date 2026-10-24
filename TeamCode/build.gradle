@@ -24,6 +24,17 @@ apply plugin: 'dev.frozenmilk.sinister.sloth.load'
 // before doing so.
 
 // Custom definitions may go here
+buildscript {
+    repositories {
+        mavenCentral()
+        google()
+        maven { url 'https://repo.dairy.foundation/releases/' }
+    }
+    dependencies {
+        // Must match the Sloth runtime that Pedro tuning and Panels pull in
+        classpath 'dev.frozenmilk:Load:0.3.2'
+    }
+}
 
 // Include common definitions from above.
 apply from: '../build.common.gradle'
@@ -43,3 +54,11 @@ android {
 dependencies {
     implementation project(':FtcRobotController')
 }
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+// Adds the deploySloth and removeSlothRemote tasks
+apply plugin: 'dev.frozenmilk.sinister.sloth.load'
