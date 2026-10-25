@@ -16,6 +16,9 @@ import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
 import org.firstinspires.ftc.teamcode.gates.Gates;
 import org.firstinspires.ftc.teamcode.launch.LaunchModel;
 import org.firstinspires.ftc.teamcode.launch.RpmTable;
+import org.firstinspires.ftc.teamcode.launch.ScoringPosition;
+import org.firstinspires.ftc.teamcode.launch.ShotQuality;
+import org.firstinspires.ftc.teamcode.leds.Leds;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
 import org.firstinspires.ftc.teamcode.vision.Alliance;
 import org.firstinspires.ftc.teamcode.vision.HiveCells;
@@ -75,6 +78,8 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
     private RpmTable pollenRpmTable;
     private RpmTable nectarRpmTable;
 
+    private Leds leds;
+    private final ScoringPosition scoringPosition = new ScoringPosition();
     private Gates gates;
     private LimelightCamera camera;
     /** Square aims at our HIVE until the driver turns. */
@@ -85,6 +90,7 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
 
     @Override
     public void init() {
+        leds = new Leds(hardwareMap);        // init: shows yellow
         follower = Constants.create(hardwareMap);
         follower.setPose(startingPose);
         follower.update();
@@ -144,6 +150,11 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
         pollenLauncher.runToRPM(pollenLauncherTargetRPM);
         gates.update();
         follower.update();
+
+        // How good this spot is for scoring both balls, shown on the LEDs
+        ShotQuality shotQuality = scoringPosition.update(alliance, follower.pose().x(), follower.pose().y());
+        leds.setState(shotQuality.ledState);
+        leds.update();
 
         if (gamepad1.circleWasPressed()) {
             fieldCentric = !fieldCentric;
@@ -228,6 +239,8 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
         telemetryM.addData("Speed Mode", speedMode);
         telemetryM.addData("Alliance", alliance);
         telemetryM.addData("Auto Aim", !autoAim ? "Off" : (aimFromVision ? "Vision" : "Odometry"));
+        telemetryM.addData("Shot Position", shotQuality);
+        telemetryM.addData("Shot Chance (%)", 100 * scoringPosition.lastChance());
         telemetryM.addData("Tags Seen", hiveTarget != null ? hiveTarget.tagCount : 0);
         if (hiveTarget != null) {
             telemetryM.addData("Target CELL", hiveTarget.cell);
