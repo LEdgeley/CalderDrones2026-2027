@@ -63,8 +63,7 @@ public class LimelightCamera {
         HiveTarget.Cell cell = null;
         for (LLResultTypes.FiducialResult tag : result.getFiducialResults()) {
             HiveTarget.Cell tagCell = cellOf(tag.getFiducialId());
-            if (!isRaised(tag)) continue;
-            if (tagCell == null) continue;
+            if (tagCell == null || !isRaised(tag)) continue;
             if (largest == null || tag.getTargetArea() > largest.getTargetArea()) {
                 largest = tag;
                 cell = tagCell;
@@ -76,9 +75,8 @@ public class LimelightCamera {
         double sumX = 0, sumY = 0, sumZ = 0, sumWeight = 0;
         int count = 0;
         for (LLResultTypes.FiducialResult tag : result.getFiducialResults()) {
-            if( !isRaised(tag)) continue;
-            if (cellOf(tag.getFiducialId()) != cell) continue;
-            double[] estimate = targetFromTag(tag, tagIndexInCell(tag.getFiducialId()));
+            if (cellOf(tag.getFiducialId()) != cell || !isRaised(tag)) continue;
+            double[] estimate = targetFromTag(tag, tag.getFiducialId() - firstTag(cell));
             if (estimate == null) continue;
             double weight = tag.getTargetArea();
             sumX += estimate[0] * weight;
@@ -137,7 +135,6 @@ public class LimelightCamera {
         return p != null && p.z > 0 && cameraToRobot(p.x, p.y, p.z)[2] > minTagHeight;
     }
 
-
     /**
      * Converts a point from camera space (+X right, +Y down, +Z out of the lens) to the robot frame,
      * using the camera mount position and orientation.
@@ -168,21 +165,20 @@ public class LimelightCamera {
         return pose.getPosition().toUnit(DistanceUnit.METER);
     }
 
+    /** Which of our HIVE's CELLs a tag is under, or null if it isn't one of ours. */
     private HiveTarget.Cell cellOf(int id) {
-        int scoring = alliance == Alliance.RED ? RED_SCORING_FIRST_TAG : BLUE_SCORING_FIRST_TAG;
-        int audience = alliance == Alliance.RED ? RED_AUDIENCE_FIRST_TAG : BLUE_AUDIENCE_FIRST_TAG;
+        int scoring = firstTag(HiveTarget.Cell.SCORING);
+        int audience = firstTag(HiveTarget.Cell.AUDIENCE);
         if (id >= scoring && id < scoring + TAGS_PER_CELL) return HiveTarget.Cell.SCORING;
         if (id >= audience && id < audience + TAGS_PER_CELL) return HiveTarget.Cell.AUDIENCE;
         return null;
     }
 
-    private int tagIndexInCell(int id) {
-        int first;
+    /** ID of the first of the four tags under one of our CELLs. */
+    private int firstTag(HiveTarget.Cell cell) {
         if (alliance == Alliance.RED) {
-            first = cellOf(id) == HiveTarget.Cell.SCORING ? RED_SCORING_FIRST_TAG : RED_AUDIENCE_FIRST_TAG;
-        } else {
-            first = cellOf(id) == HiveTarget.Cell.SCORING ? BLUE_SCORING_FIRST_TAG : BLUE_AUDIENCE_FIRST_TAG;
+            return cell == HiveTarget.Cell.SCORING ? RED_SCORING_FIRST_TAG : RED_AUDIENCE_FIRST_TAG;
         }
-        return id - first;
+        return cell == HiveTarget.Cell.SCORING ? BLUE_SCORING_FIRST_TAG : BLUE_AUDIENCE_FIRST_TAG;
     }
 }

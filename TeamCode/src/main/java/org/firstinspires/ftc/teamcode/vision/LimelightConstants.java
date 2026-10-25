@@ -8,7 +8,7 @@ import com.bylazar.configurables.annotations.Configurable;
  * Robot frame: +X forward, +Y left, +Z up, origin at the robot's centre of rotation on the floor.
  * Lengths are in metres, angles in degrees.
  *
- * TODO: the camera mount values and tag offsets are placeholders until the camera is fitted.
+ * TODO: the camera mount values are placeholders until the camera is fitted.
  */
 @Configurable
 public class LimelightConstants {
@@ -53,7 +53,6 @@ public class LimelightConstants {
      * and the lowered CELL's (0.919 m).
      */
     public static double minTagHeight = 1.08;
-
 
     /**
      * Offset from each tag's centre to the centre of its CELL's open face, indexed by the tag's
