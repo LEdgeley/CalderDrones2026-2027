@@ -9,6 +9,8 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.hardware.configuration.typecontainers.MotorConfigurationType;
+import com.qualcomm.robotcore.util.ElapsedTime;
+
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
 import java.util.HashMap;
@@ -31,9 +33,13 @@ public class Kiwi implements Drivetrain {
     private static final int C = 2;
 
     private static final double SIN_60 = Math.sqrt(3) / 2.0;
+    /** The battery voltage is read at most this often, as each read takes loop time. */
+    private static final double VOLTAGE_READ_INTERVAL_SECONDS = 0.1;
 
     private double powerScale = 1.0;
     private DrivePowers drivePowers = DrivePowers.zero();
+    private final ElapsedTime voltageTimer = new ElapsedTime();
+    private double voltage = Double.NaN;
 
     public Kiwi(HardwareMap map, KiwiConfig config) {
         this.config = config;
@@ -63,25 +69,25 @@ public class Kiwi implements Drivetrain {
     public void applyDrive(DrivePowers powers) {
         drivePowers = powers;
 
-        double[] wheelPowers = computeWheelPowersUnnormalized(powers);
+        double[] requested = computeWheelPowersUnnormalized(powers);
 
         if (config.voltageCompensation.get()) {
             double voltageNormalized = getVoltageNormalized();
-            for (int i = 0; i < wheelPowers.length; i++) {
-                wheelPowers[i] *= voltageNormalized;
+            for (int i = 0; i < requested.length; i++) {
+                requested[i] *= voltageNormalized;
             }
         }
 
+        // Scale all three down together if any is over full power, keeping the direction of travel
         double maxPower = 1.0;
-        for (double power : wheelPowers) {
+        for (double power : requested) {
             maxPower = Math.max(maxPower, Math.abs(power));
         }
-
         powerScale = 1.0 / maxPower;
 
-        for (int i = 0; i < wheelPowers.length; i++) {
-            this.wheelPowers[i] = wheelPowers[i] / maxPower;
-            motors[i].setPower(this.wheelPowers[i]);
+        for (int i = 0; i < requested.length; i++) {
+            wheelPowers[i] = requested[i] / maxPower;
+            motors[i].setPower(wheelPowers[i]);
         }
     }
 
@@ -123,10 +129,8 @@ public class Kiwi implements Drivetrain {
 
     @Override
     public void drive(DrivePowers powers, boolean manual) {
-        if (manual && config.manualBrakeMode.get())
-            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        else
-            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        setZeroPowerBehavior(manual && config.manualBrakeMode.get()
+                ? DcMotor.ZeroPowerBehavior.BRAKE : DcMotor.ZeroPowerBehavior.FLOAT);
         applyDrive(powers);
     }
 
@@ -137,11 +141,7 @@ public class Kiwi implements Drivetrain {
 
     @Override
     public void stop(boolean brake) {
-        if (brake) {
-            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        } else {
-            setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        }
+        setZeroPowerBehavior(brake ? DcMotor.ZeroPowerBehavior.BRAKE : DcMotor.ZeroPowerBehavior.FLOAT);
 
         for (int i = 0; i < motors.length; i++) {
             wheelPowers[i] = 0;
@@ -170,8 +170,9 @@ public class Kiwi implements Drivetrain {
         }
     }
 
-    /** Returns the sum of the three motors current in Amps
-     * This is not bulk cached by the motors so each motor request is a hardware read
+    /**
+     * Total current of the three motors in amps. Motor current isn't in the bulk read, so this
+     * makes three hardware reads: avoid calling it every loop.
      */
     public double currentAmps() {
         double total = 0;
@@ -181,11 +182,12 @@ public class Kiwi implements Drivetrain {
         return total;
     }
 
-    /**
-     * @return normalized voltage for voltage compensation
-     */
+    /** Scale factor for voltage compensation, from a battery reading at most VOLTAGE_READ_INTERVAL_SECONDS old. */
     private double getVoltageNormalized() {
-        double voltage = voltageSensor.getVoltage();
+        if (Double.isNaN(voltage) || voltageTimer.seconds() > VOLTAGE_READ_INTERVAL_SECONDS) {
+            voltage = voltageSensor.getVoltage();
+            voltageTimer.reset();
+        }
         double nominalVoltage = config.nominalVoltage.get();
         double staticFrictionCoefficient = config.staticFrictionCoefficient.get();
         return (nominalVoltage - (nominalVoltage * staticFrictionCoefficient)) / (voltage

@@ -35,6 +35,8 @@ public class Flywheel {
 
     /** Longest loop time used for the slew limit, so a stalled loop can't allow a large jump. */
     private static final double MAX_LOOP_SECONDS = 0.05;
+    /** Power changes smaller than this aren't sent to the motor, as each write takes loop time. */
+    private static final double POWER_WRITE_THRESHOLD = 0.002;
 
     private final DcMotorEx motor;
     private final Controller controller;
@@ -99,8 +101,10 @@ public class Flywheel {
     /** Cuts power; with FLOAT the wheel coasts to a stop. */
     public void stop() {
         targetRPM = 0;
-        power = 0;
-        motor.setPower(0);
+        if (power != 0) {
+            power = 0;
+            motor.setPower(0);
+        }
         measure();
     }
 
@@ -245,8 +249,11 @@ public class Flywheel {
         // Limit how quickly the power can change, scaled by this loop's duration
         double maxStep = maxPowerRate * Math.min(dt, MAX_LOOP_SECONDS);
         out = Range.clip(out, power - maxStep, power + maxStep);
-        motor.setPower(out);
-        power = out;
+        double change = Math.abs(out - power);
+        if (change >= POWER_WRITE_THRESHOLD || (change > 0 && (out == 0.0 || out == 1.0))) {
+            motor.setPower(out);
+            power = out;
+        }
     }
 
     private double readRPM() {

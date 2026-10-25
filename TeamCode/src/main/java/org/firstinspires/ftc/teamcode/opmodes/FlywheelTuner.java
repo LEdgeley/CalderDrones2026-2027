@@ -10,6 +10,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
+import org.firstinspires.ftc.teamcode.helpers.BulkCache;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +76,7 @@ public class FlywheelTuner extends OpMode {
 
     private enum Mode { STOPPED, FEEDFORWARD, STEP, SHOT }
 
+    private BulkCache bulkCache;
     private Flywheel flywheel;
     private VoltageSensor voltageSensor;
     private TelemetryManager telemetryM;
@@ -117,6 +119,7 @@ public class FlywheelTuner extends OpMode {
 
     @Override
     public void init() {
+        bulkCache = new BulkCache(hardwareMap);
         flywheel = new Flywheel(hardwareMap, motorName, direction);
         applySettings();
         voltageSensor = hardwareMap.voltageSensor.iterator().next();
@@ -130,11 +133,13 @@ public class FlywheelTuner extends OpMode {
 
     @Override
     public void start() {
+        bulkCache.clear();
         loopTimer.reset();
     }
 
     @Override
     public void loop() {
+        bulkCache.clear();
         double loopMs = loopTimer.milliseconds();
         loopTimer.reset();
 
@@ -175,6 +180,18 @@ public class FlywheelTuner extends OpMode {
                 break;
         }
 
+        // Telemetry is only built when Panels is due to send it, to keep the loop fast
+        if (telemetryM.getShouldUpdateLines()) {
+            showTelemetry(loopMs);
+        }
+    }
+
+    @Override
+    public void stop() {
+        flywheel.stop();
+    }
+
+    private void showTelemetry(double loopMs) {
         // Graph lines for Panels
         telemetryM.addData("targetRPM", flywheel.targetRPM());
         telemetryM.addData("filteredRPM", flywheel.filteredRPM());
@@ -209,11 +226,6 @@ public class FlywheelTuner extends OpMode {
         }
 
         telemetryM.update(telemetry);
-    }
-
-    @Override
-    public void stop() {
-        flywheel.stop();
     }
 
     /** Copies the Panels values into the flywheel, so changes take effect straight away. */
@@ -460,11 +472,10 @@ public class FlywheelTuner extends OpMode {
                 ready = false;
             }
         }
-
-        telemetryM.addData("ready", ready ? 1 : 0);
     }
 
     private void showShot() {
+        telemetryM.addData("ready", ready ? 1 : 0);
         telemetry.addData("Shot test", "target %.0f RPM", shotRPM);
         telemetry.addData("Ready to shoot", inDip ? "NO - recovering" : (ready ? "YES" : "not yet"));
         telemetry.addData("Shots detected", shots);

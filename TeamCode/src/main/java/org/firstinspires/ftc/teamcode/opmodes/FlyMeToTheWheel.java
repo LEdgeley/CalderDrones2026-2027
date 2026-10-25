@@ -29,70 +29,72 @@
  */
 
 package org.firstinspires.ftc.teamcode.opmodes;
+
 import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
-import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
+import org.firstinspires.ftc.teamcode.helpers.BulkCache;
 
-
-/*
- * Flywheel velocity test. Holds the "Launcher" motor at targetRPM using the shared Flywheel controller
+/**
+ * Flywheel velocity test. Holds motorName at targetRPM using the shared Flywheel controller
  * (PID feedback plus feedforward, rate-limited power and a filtered RPM reading).
  * It uses the Flywheel default gains; use FlywheelTuner to tune them.
  */
-
-@TeleOp(name="Fly Me To The Wheel", group="Linear OpMode")
+@TeleOp(name = "Fly Me To The Wheel", group = "Tuning")
 @Configurable
-public class FlyMeToTheWheel extends LinearOpMode {
-
-    private TelemetryManager panelsTelemetry = PanelsTelemetry.INSTANCE.getTelemetry();
-
-    // Declare OpMode members.
-    private ElapsedTime runtime = new ElapsedTime();
+public class FlyMeToTheWheel extends OpMode {
 
     public static String motorName = "Launcher";
     public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.FORWARD;
     public static double targetRPM = 5000;
 
+    private BulkCache bulkCache;
+    private Flywheel flywheel;
+    private TelemetryManager telemetryM;
+    private final ElapsedTime runtime = new ElapsedTime();
+
     @Override
-    public void runOpMode() {
+    public void init() {
+        bulkCache = new BulkCache(hardwareMap);
+        flywheel = new Flywheel(hardwareMap, motorName, direction);
+        telemetryM = PanelsTelemetry.INSTANCE.getTelemetry();
 
         telemetry.addData("Status", "Initialized");
         telemetry.update();
+    }
 
-        Flywheel flywheel = new Flywheel(hardwareMap, motorName, direction);
-
-        // Wait for the game to start (driver presses START)
-        waitForStart();
+    @Override
+    public void start() {
+        bulkCache.clear();
         runtime.reset();
         flywheel.reset();
+    }
 
+    @Override
+    public void loop() {
+        bulkCache.clear();
+        flywheel.runToRPM(targetRPM);
 
-        // run until the end of the match (driver presses STOP)
-        while (opModeIsActive()) {
-
-            flywheel.runToRPM(targetRPM);
-            double error = targetRPM - flywheel.filteredRPM();
-
-
-            // Show the elapsed game time and wheel power.
-            panelsTelemetry.addData("targetRPM", targetRPM);
-            panelsTelemetry.addData("rawRPM", flywheel.rawRPM());
-            panelsTelemetry.addData("filteredRPM", flywheel.filteredRPM());
-            panelsTelemetry.addData("out", flywheel.power());
-
-
-            telemetry.addData("Status", "Run Time: " + runtime.toString());
-            telemetry.addData("targetRPM", "targetRPM (%.2f)", targetRPM);
-            telemetry.addData("filteredRPM", "filteredRPM (%.2f)", flywheel.filteredRPM());
-            telemetry.addData("error", "error (%.2f)", error);
-            telemetry.addData("Power", "%.2f", flywheel.power());
-            panelsTelemetry.update(telemetry);
+        // Telemetry is only built when Panels is due to send it, to keep the loop fast
+        if (telemetryM.getShouldUpdateLines()) {
+            telemetryM.addData("Run Time", runtime.toString());
+            telemetryM.addData("targetRPM", targetRPM);
+            telemetryM.addData("rawRPM", flywheel.rawRPM());
+            telemetryM.addData("filteredRPM", flywheel.filteredRPM());
+            telemetryM.addData("error", targetRPM - flywheel.filteredRPM());
+            telemetryM.addData("power", flywheel.power());
+            telemetryM.update(telemetry);
         }
+    }
+
+    @Override
+    public void stop() {
+        flywheel.stop();
     }
 }
