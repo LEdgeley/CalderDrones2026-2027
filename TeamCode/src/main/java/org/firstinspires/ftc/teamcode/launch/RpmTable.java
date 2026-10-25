@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.launch;
 
+import org.firstinspires.ftc.teamcode.vision.HiveTarget;
+
 /**
  * Flywheel RPM against distance for one launcher, worked out with LaunchModel when it's created (at INIT),
  * so the OpMode loop only does a lookup. Distances are horizontal, from the launcher's axle to
@@ -10,9 +12,11 @@ public class RpmTable {
     public static final double MAX_DISTANCE = 2.30;
     public static final double STEP = 0.05;
 
+    private final LaunchModel.Launcher launcher;
     private final double[] rpm;
 
     public RpmTable(LaunchModel.Launcher launcher) {
+        this.launcher = launcher;
         int n = (int) Math.round((MAX_DISTANCE - MIN_DISTANCE) / STEP) + 1;
         rpm = new double[n];
         for (int i = 0; i < n; i++) {
@@ -27,6 +31,11 @@ public class RpmTable {
                 if (i + d < n && !Double.isNaN(solved[i + d])) { rpm[i] = solved[i + d]; break; }
             }
         }
+    }
+
+    /** RPM to hit a target the camera sees, from this launcher's axle. */
+    public double rpmFor(HiveTarget target) {
+        return rpmAt(target.horizontalDistanceFrom(launcher.axleForward, launcher.axleLeft));
     }
 
     /** RPM for an axle-to-target distance, interpolated, held at the table's ends. NaN if nothing scores anywhere. */
