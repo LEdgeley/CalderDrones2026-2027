@@ -14,7 +14,13 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
 import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
 import org.firstinspires.ftc.teamcode.gates.Gates;
+import org.firstinspires.ftc.teamcode.launch.LaunchModel;
+import org.firstinspires.ftc.teamcode.launch.RpmTable;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
+import org.firstinspires.ftc.teamcode.vision.Alliance;
+import org.firstinspires.ftc.teamcode.vision.HiveCells;
+import org.firstinspires.ftc.teamcode.vision.HiveTarget;
+import org.firstinspires.ftc.teamcode.vision.LimelightCamera;
 
 /**
  * Driving test TeleOp using Pedro Pathing 3's manual drive and heading lock.
@@ -28,7 +34,9 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
 @Configurable
 public class MoreThanDrivingTestTeleOp extends OpMode {
 
-    public static Pose startingPose = new Pose(72, 72, 0);
+    public static Pose startingPose = new Pose(72, 10.44, Math.toRadians(90));
+    /** Which HIVE to aim at. */
+    public static Alliance alliance = Alliance.RED;
 
     // Heading lock gains (turn power per radian of error, and per rad/s of angular velocity for kD)
     public static double kP = 0.8;
@@ -56,19 +64,22 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
 
     private HeadingState headingState = HeadingState.LOCKED;
 
-    // Launcher geometry for converting a ball launch speed into flywheel RPM
-    private static final double FLYWHEEL_DIAMETER_M = 0.090;
-    /** Ball exit speed / flywheel surface speed, measured in the 60 degree launcher test. */
-    private static final double EXIT_SPEED_RATIO = 0.406;
-    /** Placeholder launch speed until targetRPM control is added. */
-    private static final double LAUNCH_SPEED_MPS = 6.0;
+    /** Launch speed used when the camera can't see our tags. */
+    private static final double DEFAULT_LAUNCH_SPEED_MPS = 6.0;
 
     private Flywheel pollenLauncher;
     private Flywheel nectarLauncher;
-    private double pollenLauncherTargetRPM = launchSpeedToRPM(LAUNCH_SPEED_MPS);
-    private double nectarLauncherTargetRPM = launchSpeedToRPM(LAUNCH_SPEED_MPS);
+    private double pollenLauncherTargetRPM = LaunchModel.rpmForSpeed(DEFAULT_LAUNCH_SPEED_MPS);
+    private double nectarLauncherTargetRPM = LaunchModel.rpmForSpeed(DEFAULT_LAUNCH_SPEED_MPS);
+    // RPM against distance for each launcher, worked out with the flight model at INIT
+    private RpmTable pollenRpmTable;
+    private RpmTable nectarRpmTable;
 
     private Gates gates;
+    private LimelightCamera camera;
+    /** Square aims at our HIVE until the driver turns. */
+    private boolean autoAim = false;
+    private boolean aimFromVision = false;
     private double targetHeading = 0.0;
     private boolean fieldCentric = false;
 
@@ -95,6 +106,11 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
         pollenLauncher.reset();
 
         gates = new Gates(hardwareMap);
+        camera = new LimelightCamera(hardwareMap, alliance);
+
+        // Takes about a second on the Control Hub
+        pollenRpmTable = new RpmTable(LaunchModel.Launcher.POLLEN);
+        nectarRpmTable = new RpmTable(LaunchModel.Launcher.NECTAR);
 
         telemetry.addData("Status", "Initialized. Circle toggles robot/field-centric.");
         telemetry.update();
@@ -110,6 +126,20 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
 
     @Override
     public void loop() {
+        camera.setAlliance(alliance);
+        HiveTarget hiveTarget = camera.findTarget();
+
+        // Flywheel speeds from the distance to the CELL, or the default speed when no tags are in view
+        if (hiveTarget != null) {
+            pollenLauncherTargetRPM = pollenRpmTable.rpmAt(hiveTarget.horizontalDistanceFrom(
+                    LaunchModel.Launcher.POLLEN.axleForward, LaunchModel.Launcher.POLLEN.axleLeft));
+            nectarLauncherTargetRPM = nectarRpmTable.rpmAt(hiveTarget.horizontalDistanceFrom(
+                    LaunchModel.Launcher.NECTAR.axleForward, LaunchModel.Launcher.NECTAR.axleLeft));
+        } else {
+            pollenLauncherTargetRPM = LaunchModel.rpmForSpeed(DEFAULT_LAUNCH_SPEED_MPS);
+            nectarLauncherTargetRPM = LaunchModel.rpmForSpeed(DEFAULT_LAUNCH_SPEED_MPS);
+        }
+
         nectarLauncher.runToRPM(nectarLauncherTargetRPM);
         pollenLauncher.runToRPM(pollenLauncherTargetRPM);
         gates.update();
@@ -130,6 +160,12 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
 
         double heading = follower.pose().heading();
         double angularVelocity = follower.twist().omega;
+
+        if (gamepad1.squareWasPressed()) {
+            autoAim = true;
+            aimFromVision = false;
+            headingController.reset();
+        }
 
         String speedMode;
         double speed;
@@ -160,8 +196,20 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
             // Driver is turning: pass the stick straight through
             headingState = HeadingState.TURNING;
             targetHeading = heading;
+            autoAim = false;
         } else {
-            if (headingState != HeadingState.LOCKED) {
+            if (autoAim) {
+                if (hiveTarget != null) {
+                    // Tags in view: point straight at the CELL's open face
+                    targetHeading = hiveTarget.targetHeading(heading);
+                    aimFromVision = true;
+                } else if (!aimFromVision) {
+                    // No tags yet: point roughly at our nearest CELL using odometry. Once the camera has
+                    // given a heading, keep it if the tags drop out rather than going back to the rough one.
+                    targetHeading = HiveCells.headingToNearestCell(alliance, follower.pose().x(), follower.pose().y());
+                }
+                headingState = HeadingState.LOCKED;
+            } else if (headingState != HeadingState.LOCKED) {
                 headingState = HeadingState.SETTLING;
                 targetHeading = heading;
 
@@ -178,6 +226,14 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
 
         telemetryM.addData("Drive Mode", fieldCentric ? "Field-centric" : "Robot-centric");
         telemetryM.addData("Speed Mode", speedMode);
+        telemetryM.addData("Alliance", alliance);
+        telemetryM.addData("Auto Aim", !autoAim ? "Off" : (aimFromVision ? "Vision" : "Odometry"));
+        telemetryM.addData("Tags Seen", hiveTarget != null ? hiveTarget.tagCount : 0);
+        if (hiveTarget != null) {
+            telemetryM.addData("Target CELL", hiveTarget.cell);
+            telemetryM.addData("Target Distance (m)", hiveTarget.horizontalDistance());
+            telemetryM.addData("Target Bearing", Math.toDegrees(hiveTarget.bearing()));
+        }
         telemetryM.addData("Heading State", headingState);
         telemetryM.addData("Target Heading", Math.toDegrees(targetHeading));
         telemetryM.addData("Actual Heading", Math.toDegrees(heading));
@@ -197,10 +253,9 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
         telemetryM.update(telemetry);
     }
 
-    /** Flywheel RPM that launches a ball at speedMps, assuming the flywheel is driven 1:1 by its motor. */
-    private static double launchSpeedToRPM(double speedMps) {
-        double surfaceSpeed = speedMps / EXIT_SPEED_RATIO;
-        return surfaceSpeed / (Math.PI * FLYWHEEL_DIAMETER_M) * 60.0;
+    @Override
+    public void stop() {
+        camera.stop();
     }
 
     private void lockHeading() {
