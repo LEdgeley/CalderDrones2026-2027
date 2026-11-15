@@ -110,6 +110,7 @@ public class Flywheel {
     private double rpmFilterTimeConstant = DEFAULT_RPM_FILTER_TIME_CONSTANT;
     private double readyTolerancePercent = DEFAULT_READY_TOLERANCE_PERCENT;
     private double readyHoldMs = DEFAULT_READY_HOLD_MS;
+    private DcMotor.ZeroPowerBehavior zeroPowerBehavior = DcMotor.ZeroPowerBehavior.FLOAT;
 
     private double rawRPM = 0;
     private double filteredRPM = 0;
@@ -140,7 +141,7 @@ public class Flywheel {
         this.motorName = motorName;
         motor = Devices.get(hardwareMap, DcMotorEx.class, motorName, m -> {
             m.setDirection(direction);
-            m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+            m.setZeroPowerBehavior(zeroPowerBehavior);
         });
         voltageSensor = hardwareMap.voltageSensor.iterator().hasNext()
                 ? hardwareMap.voltageSensor.iterator().next() : null;
@@ -341,6 +342,21 @@ public class Flywheel {
 
     public void setMaxPowerRate(double maxPowerRate) {
         this.maxPowerRate = maxPowerRate;
+    }
+
+    public DcMotor.ZeroPowerBehavior getZeroPowerBehavior() {
+        return zeroPowerBehavior;
+    }
+
+    /**
+     * FLOAT (the default) lets the wheel coast down to a lower target; BRAKE shorts the motor when the
+     * power is 0, so it slows much faster but with a jolt through the belt and a burst of current.
+     * Only sent to the motor when it changes, as each write takes loop time.
+     */
+    public void setZeroPowerBehavior(DcMotor.ZeroPowerBehavior behavior) {
+        if (behavior == zeroPowerBehavior) return;
+        zeroPowerBehavior = behavior;
+        if (motor != null) motor.setZeroPowerBehavior(behavior);
     }
 
     public double getRpmFilterTimeConstant() {
