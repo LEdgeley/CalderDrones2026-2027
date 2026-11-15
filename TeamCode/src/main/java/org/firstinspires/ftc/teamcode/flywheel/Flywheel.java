@@ -350,7 +350,9 @@ public class Flywheel {
 
     /**
      * FLOAT (the default) lets the wheel coast down to a lower target; BRAKE shorts the motor when the
-     * power is 0, so it slows much faster but with a jolt through the belt and a burst of current.
+     * power is 0, so the motor's own back EMF slows it much faster. The braking current flows round the
+     * motor and the hub's switches, heating the motor, but isn't drawn from the battery. The sudden
+     * reversal of torque jolts the belt.
      * Only sent to the motor when it changes, as each write takes loop time.
      */
     public void setZeroPowerBehavior(DcMotor.ZeroPowerBehavior behavior) {
