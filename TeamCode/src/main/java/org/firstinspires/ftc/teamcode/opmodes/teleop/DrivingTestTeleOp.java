@@ -10,6 +10,7 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import org.firstinspires.ftc.teamcode.drive.TeleOpDrive;
 import org.firstinspires.ftc.teamcode.helpers.BulkCache;
+import org.firstinspires.ftc.teamcode.helpers.MatchState;
 import org.firstinspires.ftc.teamcode.helpers.SystemStatus;
 
 /**
@@ -31,12 +32,14 @@ public class DrivingTestTeleOp extends OpMode {
     @Override
     public void init() {
         bulkCache = new BulkCache(hardwareMap);
-        follower = TeleOpDrive.createFollower(hardwareMap, startingPose, status);
+        // Where the last auto finished, if one has run since the app started; otherwise startingPose
+        follower = TeleOpDrive.createFollower(hardwareMap, MatchState.poseOr(startingPose), status);
         drive = follower != null ? new TeleOpDrive(follower) : null;
 
         telemetryM = PanelsTelemetry.INSTANCE.getTelemetry();
 
         telemetry.addData("Status", "Initialized. Circle toggles robot/field-centric.");
+        telemetry.addData("Start", MatchState.pose() != null ? "where the auto finished" : "the default pose (no auto has run)");
         status.addTelemetry(telemetry);
         telemetry.update();
     }

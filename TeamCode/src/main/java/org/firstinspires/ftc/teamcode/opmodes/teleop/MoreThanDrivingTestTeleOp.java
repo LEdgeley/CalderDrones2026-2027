@@ -15,6 +15,7 @@ import org.firstinspires.ftc.teamcode.drive.TeleOpDrive;
 import org.firstinspires.ftc.teamcode.flywheel.Flywheel;
 import org.firstinspires.ftc.teamcode.gates.Gates;
 import org.firstinspires.ftc.teamcode.helpers.BulkCache;
+import org.firstinspires.ftc.teamcode.helpers.MatchState;
 import org.firstinspires.ftc.teamcode.helpers.SystemStatus;
 import org.firstinspires.ftc.teamcode.intake.Intake;
 import org.firstinspires.ftc.teamcode.launch.LaunchModel;
@@ -35,6 +36,7 @@ import org.firstinspires.ftc.teamcode.vision.LimelightCamera;
  * Square          Auto-aim at our HIVE until the right stick is turned
  * Cross           Collect the nearest Pollen or Nectar of ours (CollectAssist); press again, or move
  *                 a stick, to cancel
+ * Triangle        Intake on / off by hand, without the collect (cancels a collect that's running)
  * Right trigger   Feed a Pollen (only when its flywheel is at speed)
  * Left trigger    Feed a Nectar (only when its flywheel is at speed)
  *
@@ -76,6 +78,8 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
     private Intake intake;
     private CollectAssist collect;  // null when the drive is disabled
     private boolean wasCollecting = false;
+    /** The intake turned on by hand (triangle), not by a collect. */
+    private boolean manualIntake = false;
 
     private Leds leds;
     private final ElapsedTime faultFlashTimer = new ElapsedTime();
@@ -85,7 +89,8 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
     public void init() {
         bulkCache = new BulkCache(hardwareMap);
         leds = new Leds(hardwareMap);  // shows yellow: ready to drive
-        follower = TeleOpDrive.createFollower(hardwareMap, startingPose, status);
+        // Where the last auto finished, if one has run since the app started; otherwise startingPose
+        follower = TeleOpDrive.createFollower(hardwareMap, MatchState.poseOr(startingPose), status);
         drive = follower != null ? new TeleOpDrive(follower) : null;
 
         telemetryM = PanelsTelemetry.INSTANCE.getTelemetry();
@@ -110,6 +115,7 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
         nectarRpmTable = new RpmTable(LaunchModel.Launcher.NECTAR);
 
         telemetry.addData("Status", "Initialized. Circle toggles robot/field-centric.");
+        telemetry.addData("Start", MatchState.pose() != null ? "where the auto finished" : "the default pose (no auto has run)");
         status.addTelemetry(telemetry);
         telemetry.update();
     }
@@ -158,16 +164,31 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
             nectarLauncher.shotFired();
         }
 
-        // Cross collects the nearest ball of ours; cross again or moving a stick cancels
+        // Triangle turns the intake on or off by hand. During a collect (or the moment it runs the intake on after
+        // one) it cancels the collect, which stops the intake, and turns the intake on.
+        if (gamepad1.triangleWasPressed()) {
+            if (collect != null && collect.getState() != CollectAssist.State.IDLE) collect.cancel();
+            manualIntake = !manualIntake;
+            if (manualIntake) intake.run(); else intake.stop();
+        }
+
+        // Cross collects the nearest ball of ours; cross again or moving a stick cancels. A collect runs the intake
+        // itself and stops it at the end, so it takes over from the hand switch.
         if (collect != null) {
             if (gamepad1.crossWasPressed()) {
-                if (collect.isActive()) collect.cancel(); else collect.start();
+                if (collect.isActive()) {
+                    collect.cancel();
+                } else {
+                    manualIntake = false;
+                    collect.start();
+                }
             } else if (collect.isActive() && sticksMoved()) {
                 collect.cancel();
             }
             collect.update(camera.findBalls(), alliance);
         }
         boolean collecting = collect != null && collect.isActive();
+        if (manualIntake) intake.update();
 
         if (drive != null && !collecting) {
             // After a collect, hold the heading it left the robot at
@@ -192,6 +213,7 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
 
     @Override
     public void stop() {
+        intake.stop();
         camera.stop();
     }
 
@@ -213,6 +235,7 @@ public class MoreThanDrivingTestTeleOp extends OpMode {
             telemetryM.addLine("Nectar launcher FAULT: " + nectarLauncher.faultMessage());
         }
         telemetryM.addData("Alliance", alliance);
+        telemetryM.addData("Intake", manualIntake ? "On (triangle)" : intake.isRunning() ? "On (collect)" : "Off");
         if (drive != null) {
             telemetryM.addData("Auto Aim", !drive.isAiming() ? "Off" : (hiveAim.isFromVision() ? "Vision" : "Odometry"));
             telemetryM.addData("Shot Position", shotQuality);
