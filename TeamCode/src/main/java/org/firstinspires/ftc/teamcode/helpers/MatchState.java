@@ -37,6 +37,11 @@ public class MatchState {
         return pose;
     }
 
+    /** Where the last auto finished, or the fallback (a TeleOp's default pose) if none has run. */
+    public static Pose poseOr(Pose fallback) {
+        return pose != null ? pose : fallback;
+    }
+
     /** Seconds since the last save, or NaN if nothing has been saved. */
     public static double ageSeconds() {
         if (pose == null) return Double.NaN;

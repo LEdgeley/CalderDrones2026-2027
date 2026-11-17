@@ -5,6 +5,7 @@ import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -70,6 +71,11 @@ public class FlywheelTuner extends OpMode {
     public static double kS = Flywheel.DEFAULT_KS;
     public static double maxPowerRate = Flywheel.DEFAULT_MAX_POWER_RATE;
     public static double rpmFilterTimeConstant = Flywheel.DEFAULT_RPM_FILTER_TIME_CONSTANT;
+    /**
+     * FLOAT coasts down to a lower target; BRAKE slows the wheel faster when the controller asks for
+     * no power. Compare "Last step down" in the step test with each, and watch the belt.
+     */
+    public static DcMotor.ZeroPowerBehavior zeroPowerBehavior = DcMotor.ZeroPowerBehavior.FLOAT;
 
     // Feedforward test settings
     public static double ffStartPower = 0.2;
@@ -243,6 +249,7 @@ public class FlywheelTuner extends OpMode {
         telemetry.addData("Loop time", "%.0f ms", loopMs);
         telemetry.addData("Gains", "kP %.6f  kI %.7f  kD %.7f", flywheel.getKP(), flywheel.getKI(), flywheel.getKD());
         telemetry.addData("Feedforward", "kV %.10f  kS %.6f", flywheel.getKV(), flywheel.getKS());
+        telemetry.addData("At zero power", flywheel.getZeroPowerBehavior());
 
         switch (mode) {
             case FEEDFORWARD:
@@ -281,6 +288,7 @@ public class FlywheelTuner extends OpMode {
         flywheel.setFeedforward(kV, kS);
         flywheel.setMaxPowerRate(maxPowerRate);
         flywheel.setRpmFilterTimeConstant(rpmFilterTimeConstant);
+        flywheel.setZeroPowerBehavior(zeroPowerBehavior);
     }
 
     // ---------------- Feedforward test ----------------

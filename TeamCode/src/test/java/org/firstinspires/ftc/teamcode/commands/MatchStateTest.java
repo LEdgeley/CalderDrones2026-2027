@@ -31,4 +31,13 @@ public class MatchStateTest {
         assertTrue(age >= 0.015 && age < 5);
         assertEquals(Alliance.BLUE, MatchState.alliance());
     }
+
+    @Test
+    public void poseOrIsTheFallbackUntilAnAutoSaves() {
+        Pose fallback = new Pose(72, 72, 0);
+        assertEquals(fallback, MatchState.poseOr(fallback));
+        Pose end = new Pose(30, 40, 1.5);
+        MatchState.save(Alliance.RED, end);
+        assertEquals(end, MatchState.poseOr(fallback));
+    }
 }
