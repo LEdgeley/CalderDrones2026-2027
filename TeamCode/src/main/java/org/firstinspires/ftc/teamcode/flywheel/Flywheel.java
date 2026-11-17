@@ -42,6 +42,16 @@ import java.util.function.LongSupplier;
  *    every jamCheckSeconds in case the wheel jams later.
  * Open loop needs tuned kV and kS: with the defaults (0) the wheel just stops.
  * The safety settings below are shared by all flywheels and live-tunable in Panels.
+ *
+ * kV and kS are the feedforward at nominalVoltage (FlywheelTuner fits them that way). Closed and
+ * open loop both scale them by nominalVoltage / battery voltage, so a fresh battery doesn't
+ * overshoot the target and a flat one doesn't fall short.
+ *
+ * Encoder: by default the speed comes from the motor's built-in encoder. useEncoder() switches to
+ * another one, e.g. a REV Through Bore on the flywheel shaft (set countsPerRev to
+ * THROUGH_BORE_COUNTS_PER_REV), plugged into this motor's encoder port or another motor's. The hub
+ * reports velocity as a 16-bit number, which wraps above 32767 counts per second (only 240 RPM for
+ * a Through Bore), so the reading is corrected using the change in position, which doesn't wrap.
  */
 @Configurable
 public class Flywheel {
@@ -68,6 +78,8 @@ public class Flywheel {
     // Default settings every new flywheel starts with
     /** Encoder counts per motor revolution (the HD Hex motor's built-in encoder). */
     public static final double DEFAULT_COUNTS_PER_REV = 28.0;
+    /** Encoder counts per revolution of a REV Through Bore encoder. */
+    public static final double THROUGH_BORE_COUNTS_PER_REV = 8192.0;
     // Feedback gains (power per RPM of error)
     public static final double DEFAULT_KP = 0.0005;
     public static final double DEFAULT_KI = 0.0;
@@ -92,9 +104,35 @@ public class Flywheel {
     private static final double SETTLED_POWER_ERROR = 0.02;
     /** The battery voltage is read at most this often in open loop, as each read takes loop time. */
     private static final double VOLTAGE_READ_INTERVAL_SECONDS = 0.1;
+    /** The hub's velocity is a signed 16-bit count, so it wraps by this many counts per second. */
+    private static final double VELOCITY_WRAP = 65536.0;
+    /**
+     * How often the unwrapped speed is checked against the change in position. Long enough that
+     * a few milliseconds' timing slip at each end of the window stays well under half a wrap
+     * (a third at 6000 RPM with 4 ms each way).
+     */
+    private static final double WRAP_CHECK_SECONDS = 0.3;
+    /**
+     * For this long after the first read, the wrap is chosen by the change in position since then
+     * rather than by the last reading, as there's no reading yet to go by (the wheel may still be
+     * coasting from the last OpMode).
+     */
+    private static final double SYNC_SECONDS = 0.1;
 
     private final String motorName;
     private final DcMotorEx motor;  // null when the flywheel is disabled
+    private String encoderName = "";  // "" when the encoder is the motor's own
+    private DcMotorEx encoder;  // the motor whose encoder port it's plugged into; null if missing
+    private boolean encoderReversed = false;
+    private boolean hasRead = false;  // whether the encoder has been read yet
+    private boolean synced = false;  // whether the last reading can be trusted to unwrap the next
+    private int lastPosition = 0;
+    private double lastVelocity = 0;  // counts per second, unwrapped
+    // Wrap check: the position at the start of the window, its length, and the counts the
+    // unwrapped speeds add up to over it
+    private int checkStartPosition = 0;
+    private double checkSeconds = 0;
+    private double checkCounts = 0;
     private final VoltageSensor voltageSensor;  // null if there's no hub to read it from
     private final Controller controller;
     private final LongSupplier clock;  // nanoseconds; injectable so tests don't have to sleep
@@ -122,6 +160,7 @@ public class Flywheel {
     private boolean inReadyWindow = false;  // within tolerance since readyTimer was last reset
     private double readyWindowTarget = 0;   // the target the hold is being timed against
     private double voltage = Double.NaN;
+    private double voltageCompensation = 1.0;  // nominalVoltage / battery voltage
     private double faultCurrent = 0;
 
     public Flywheel(HardwareMap hardwareMap, String motorName, DcMotorSimple.Direction direction) {
@@ -142,17 +181,19 @@ public class Flywheel {
             m.setDirection(direction);
             m.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         });
+        encoder = motor;
         voltageSensor = hardwareMap.voltageSensor.iterator().hasNext()
                 ? hardwareMap.voltageSensor.iterator().next() : null;
 
         // The controllers read this flywheel's gains through suppliers every loop, so the setters
-        // take effect immediately without rebuilding the controllers
+        // take effect immediately without rebuilding the controllers. The feedforward gains are
+        // for nominalVoltage, so they're scaled for the battery, as in open loop.
         controller = Controller.sum(
                 Controller.proportional(() -> kP),
                 Controller.integral(() -> kI),
                 Controller.derivative(() -> kD),
-                Controller.proportionalFeedforward(() -> kV),
-                Controller.staticTargetFeedforward(() -> kS)
+                Controller.proportionalFeedforward(() -> kV * voltageCompensation),
+                Controller.staticTargetFeedforward(() -> kS * voltageCompensation)
         );
     }
 
@@ -161,9 +202,22 @@ public class Flywheel {
         return motor != null;
     }
 
-    /** The motor's name in quotes if it's missing, otherwise "". */
+    /** The motor's name (and a separate encoder's) in quotes if it's missing, otherwise "". */
     public String missingDevices() {
-        return Devices.missing(motor, motorName);
+        return Devices.join(Devices.missing(motor, motorName),
+                encoderName.isEmpty() ? "" : Devices.missing(encoder, encoderName));
+    }
+
+    /**
+     * Reads the speed from the encoder plugged into the encoder port of the motor called encoderName,
+     * or from this flywheel's own motor if encoderName is "". Set countsPerRev to match the encoder.
+     * That motor's direction (set by whatever drives it) also sets which way the encoder counts, so
+     * use setEncoderReversed() rather than changing it. Call before reset().
+     */
+    public void useEncoder(HardwareMap hardwareMap, String encoderName) {
+        this.encoderName = encoderName;
+        encoder = encoderName.isEmpty() ? motor : Devices.get(hardwareMap, DcMotorEx.class, encoderName);
+        resync();
     }
 
     /**
@@ -173,7 +227,7 @@ public class Flywheel {
     public void reset() {
         loopTimer.reset();
         controller.reset();
-        rawRPM = readRPM();
+        rawRPM = readRPM(0);
         filteredRPM = rawRPM;
         rpmRate = 0;
         health = Health.OK;
@@ -188,6 +242,7 @@ public class Flywheel {
         if (health != Health.OK) inReadyWindow = false;
         switch (health) {
             case OK:
+                updateVoltageCompensation();
                 double error = targetRPM - filteredRPM;
                 // Passing the filtered RPM's rate of change makes the D term act on the measurement
                 applyPower(controller.calculate(targetRPM, error, rpmRate), dt);
@@ -375,6 +430,16 @@ public class Flywheel {
         this.countsPerRev = countsPerRev;
     }
 
+    public boolean isEncoderReversed() {
+        return encoderReversed;
+    }
+
+    /** Set when the encoder counts backwards (negative RPM while the wheel spins forwards). */
+    public void setEncoderReversed(boolean encoderReversed) {
+        if (encoderReversed != this.encoderReversed) resync();
+        this.encoderReversed = encoderReversed;
+    }
+
     /** The motor's direction, or null if it's missing. */
     public DcMotorSimple.Direction getDirection() {
         return motor != null ? motor.getDirection() : null;
@@ -391,7 +456,7 @@ public class Flywheel {
         double dt = loopTimer.seconds();
         loopTimer.reset();
 
-        rawRPM = readRPM();
+        rawRPM = readRPM(dt);
         double alpha = rpmFilterTimeConstant > 0 ? dt / (rpmFilterTimeConstant + dt) : 1.0;
         double lastFilteredRPM = filteredRPM;
         filteredRPM += alpha * (rawRPM - filteredRPM);
@@ -440,8 +505,76 @@ public class Flywheel {
         }
     }
 
-    private double readRPM() {
-        return motor != null ? motor.getVelocity() / countsPerRev * 60.0 : 0.0;
+    /**
+     * The encoder's speed in RPM. dt is the time in seconds since the last read, or 0 if unknown.
+     *
+     * The hub's velocity has 16-bit wraps added back: as many as bring it closest to the last
+     * speed read. The wheel's speed changes by much less than half a wrap (240 RPM for a Through
+     * Bore) between reads, and unlike an estimate from the change in position over one loop, this
+     * doesn't depend on timing. The loop time is measured here, but the position is sampled during
+     * the bulk read, a variable few milliseconds later; in a 20 ms loop at 3000 RPM, a 2 ms slip
+     * puts that estimate out by more than half a wrap, which showed up as 480 RPM spikes.
+     *
+     * The change in position is the guide instead for the first SYNC_SECONDS (there's no reading
+     * yet; the wheel may still be coasting from the last OpMode, so readings in that time can be
+     * a wrap out) and after a long gap between reads. Every WRAP_CHECK_SECONDS it's compared with
+     * the counts the unwrapped speeds add up to over the same time. Over that longer window, timing
+     * slips are small, so a wrap's worth of difference means one was missed (e.g. a sudden jolt
+     * of more than half a wrap in one loop) and is put right.
+     */
+    private double readRPM(double dt) {
+        if (motor == null || encoder == null) return 0.0;
+        if (!hasRead) dt = 0;  // e.g. the first read after INIT: the time since construction means nothing
+        int sign = encoderReversed ? -1 : 1;
+        int position = sign * encoder.getCurrentPosition();
+        // int subtraction stays right even when the position wraps past Integer.MAX_VALUE
+        int moved = position - lastPosition;
+        double sinceSync = checkSeconds + dt;
+        double reference;
+        if (dt >= WRAP_CHECK_SECONDS) {
+            reference = moved / dt;
+        } else if (!synced && sinceSync > 0) {
+            reference = (position - checkStartPosition) / sinceSync;
+        } else {
+            reference = lastVelocity;
+        }
+        double velocity = unwrap(sign * encoder.getVelocity(), reference);
+
+        if (dt > 0) {
+            checkSeconds += dt;
+            checkCounts += (lastVelocity + velocity) / 2 * dt;
+            if (checkSeconds >= SYNC_SECONDS) synced = true;
+            if (checkSeconds >= WRAP_CHECK_SECONDS) {
+                double missed = ((position - checkStartPosition) - checkCounts) / checkSeconds;
+                velocity += VELOCITY_WRAP * Math.round(missed / VELOCITY_WRAP);
+                startWrapCheck(position);
+            }
+        } else {
+            startWrapCheck(position);
+        }
+
+        hasRead = true;
+        lastPosition = position;
+        lastVelocity = velocity;
+        return velocity / countsPerRev * 60.0;
+    }
+
+    /** Forgets the previous reading, e.g. after a change of encoder, so the next reads sync afresh. */
+    private void resync() {
+        hasRead = false;
+        synced = false;
+        lastVelocity = 0;
+    }
+
+    /** velocity with as many 16-bit wraps added as bring it closest to reference. */
+    private static double unwrap(double velocity, double reference) {
+        return velocity + VELOCITY_WRAP * Math.round((reference - velocity) / VELOCITY_WRAP);
+    }
+
+    private void startWrapCheck(int position) {
+        checkStartPosition = position;
+        checkSeconds = 0;
+        checkCounts = 0;
     }
 
     /** Closed loop: is the wheel getting power but the encoder reading nothing? If so for long enough, find out why. */
@@ -508,13 +641,23 @@ public class Flywheel {
         }
     }
 
-    /** Feedforward power for a target, scaled up as the battery drops below nominalVoltage. */
+    /** Feedforward power for a target, scaled for the battery (see updateVoltageCompensation()). */
     private double openLoopPower(double target) {
+        updateVoltageCompensation();
+        return (kS + kV * target) * voltageCompensation;
+    }
+
+    /**
+     * Sets voltageCompensation to nominalVoltage / battery voltage, so the feedforward gives the
+     * same motor voltage whatever the battery: less power on a fresh 13.8 V battery, more as it
+     * sags. The battery isn't in the bulk read, so it's read at most every
+     * VOLTAGE_READ_INTERVAL_SECONDS. With no battery reading, the gains are used as they are.
+     */
+    private void updateVoltageCompensation() {
         if (voltageSensor != null && (Double.isNaN(voltage) || voltageTimer.seconds() > VOLTAGE_READ_INTERVAL_SECONDS)) {
             voltage = voltageSensor.getVoltage();
             voltageTimer.reset();
         }
-        double compensation = voltage > 1 ? nominalVoltage / voltage : 1.0;
-        return (kS + kV * target) * compensation;
+        voltageCompensation = voltage > 1 ? nominalVoltage / voltage : 1.0;
     }
 }
