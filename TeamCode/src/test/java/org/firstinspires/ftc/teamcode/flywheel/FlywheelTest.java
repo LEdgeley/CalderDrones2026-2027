@@ -210,7 +210,11 @@ public class FlywheelTest {
 
     @Test
     public void noFaultWhilePowerIsBelowTheMinimum() {
-        // Target so low that the feedforward power stays under faultMinPower
+        // Feedforward only, with a target so low that the power stays under faultMinPower.
+        // The gains are set here rather than using the defaults, which change as the robot is tuned
+        // (a tuned kS can be near faultMinPower on its own, and kI would wind up with no speed reading).
+        flywheel.setPID(0, 0, 0);
+        flywheel.setFeedforward(0.00015, 0.01);
         for (int i = 0; i < 400; i++) {
             nanos.addAndGet(STEP_NANOS);
             setRPM(0);
