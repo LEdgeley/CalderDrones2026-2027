@@ -56,12 +56,12 @@ public class FlywheelTuner extends OpMode {
 
     // Which flywheel to tune (read at INIT)
     public static String motorName = "PollenLauncher";
-    public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.FORWARD;
+    public static DcMotorSimple.Direction direction = DcMotorSimple.Direction.REVERSE;
     /** The motor whose encoder port the encoder is plugged into, or "" for this flywheel's own motor (read at INIT). */
     public static String encoderPort = "";
     /** THROUGH_BORE for the pollen launcher; MOTOR for a launcher without one. */
     public static EncoderType encoderType = EncoderType.THROUGH_BORE;
-    public static boolean encoderReversed = false;
+    public static boolean encoderReversed = true;
 
     // Gains being tuned, starting from the Flywheel defaults
     public static double kP = Flywheel.DEFAULT_KP;

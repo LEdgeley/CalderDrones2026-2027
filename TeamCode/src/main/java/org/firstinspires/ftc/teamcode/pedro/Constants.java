@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.pedro;
 
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.algorithm.ForesightConfig;
 import com.pedropathing.controllers.Controller;
@@ -26,6 +27,7 @@ import org.firstinspires.ftc.teamcode.kiwi.KiwiConfig;
  *
  * Values marked TODO are placeholders until the robot is tuned.
  */
+@Configurable
 public class Constants {
     public static KiwiConfig drivetrainConfig = new KiwiConfig(c -> {
         c.motorAName.set("MotorA");
@@ -41,18 +43,12 @@ public class Constants {
      * tuner (Tuning.pinpointTuner) on the robot and copy its results in.
      */
     public static PinpointConfig localizerConfig = new PinpointConfig(c -> {
-        // The Pinpoint's name in the robot configuration. Pedro has no default for it (reading it
-        // unset throws, which disables Drive), so it must be set. TODO: check it matches the robot's
-        // configuration; "pinpoint" is the name the Pinpoint tuner suggests, and the sim's.
         c.name.set("pinpoint");
-        // TODO: pod type (goBILDA_4_BAR_POD or goBILDA_SWINGARM_POD), or c.ticksPerUnit for custom pods
         c.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
-        // TODO: pod offsets from the robot's centre of rotation (inches), from the tuner
-        c.xPodOffset.set(0.0);
-        c.yPodOffset.set(0.0);
-        // TODO: encoder directions, from the tuner (pushing forward must increase X, left must increase Y)
+        c.xPodOffset.set(-1.8451992545540878);
+        c.yPodOffset.set(-5.879274503452572);
         c.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
-        c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
+        c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.REVERSED);
         c.globalDistanceUnit.set(DistanceUnit.INCH);
         c.offsetUnits.set(DistanceUnit.INCH);
     });
@@ -62,30 +58,30 @@ public class Constants {
      * won't match the real robot. Run Tuning.foresightTuner on the robot, paste its results here,
      * then set foresightTuned to true.
      */
+
     public static ForesightConfig foresightConfig = new ForesightConfig(
             c -> {
-                // TODO: replace every value below with the robot's tuned values
-                Controller primaryTranslationalForward = Controller.proportional(0.7058736533290159);
-                Controller secondaryTranslationalForward = Controller.proportional(0.260801453613681);
-                Controller primaryTranslationalLateral = Controller.proportional(0.7062089426590505);
-                Controller secondaryTranslationalLateral = Controller.proportional(0.26092533406203294);
+                Controller primaryTranslationalForward = Controller.proportional(0.9747010794049246);
+                Controller secondaryTranslationalForward = Controller.proportional(0.3601260043476096);
+                Controller primaryTranslationalLateral = Controller.proportional(1.1064300871596373);
+                Controller secondaryTranslationalLateral = Controller.proportional(0.40879635284906257);
 
                 c.forwardTranslational.set(Controller.piecewise(secondaryTranslationalForward).put(2.5, primaryTranslationalForward));
                 c.strafeTranslational.set(Controller.piecewise(secondaryTranslationalLateral).put(2.5, primaryTranslationalLateral));
 
-                c.coast.set(Controller.proportionalFeedforward(0.01582613564392006));
-                c.brake.set(Controller.proportionalFeedforward(0.013452215297332051));
+                c.coast.set(Controller.proportionalFeedforward(0.025490154218181287));
+                c.brake.set(Controller.proportionalFeedforward(0.021666631085454094));
 
-                c.headingFeedback.set(Controller.proportional(0.8443331616844043));
-                c.headingBrakeCoefficients.set(Vector2D.cartesian(0.23754553470190187, 0.004642628916502741));
+                c.headingFeedback.set(Controller.proportional(4.340307443345062));
+                c.headingBrakeCoefficients.set(Vector2D.cartesian(0.057785019704679225, 0.006815977953388491));
 
-                c.linearBrakeCoefficients.set(Matrix.diag(0.15680562835551934, 0.2145569720219104));
-                c.quadraticBrakeCoefficients.set(Matrix.diag(0.004673740969314629, 0.0028396009010192933));
+                c.linearBrakeCoefficients.set(Matrix.diag(0.0965694466630066, 0.09762157253729346));
+                c.quadraticBrakeCoefficients.set(Matrix.diag(0.0031875694475989374, 0.0027674051958705196));
 
-                c.maxAchievableForwardVelocity.set(68.6950004647309);
-                c.maxAchievableStrafeVelocity.set(68.6901987579687);
-                c.naturalForwardDeceleration.set(18.51205894546473);
-                c.naturalStrafeDeceleration.set(18.202745356116683);
+                c.maxAchievableForwardVelocity.set(58.35108469254358);
+                c.maxAchievableStrafeVelocity.set(57.56626316979127);
+                c.naturalForwardDeceleration.set(57.0944241085665);
+                c.naturalStrafeDeceleration.set(55.05474076076255);
             }
     );
 
@@ -95,7 +91,7 @@ public class Constants {
      * wrong, so the PID heading lock is used instead. Set it to true once the robot is tuned. The
      * sim sets it to true in its sim-overrides.txt, as these gains came from the sim.
      */
-    public static boolean foresightTuned = false;
+    public static boolean foresightTuned = true;
 
     /** Builds the follower. */
     public static Follower create(HardwareMap h) {
